@@ -11,7 +11,7 @@ from torch.distributed.rpc import RRef
 
 
 class DistributedCUDARPCSequential(nn.Module):
-    def __init__(self, *worker_layers):
+    def __init__(self, *worker_layers, microbatch_size=None):
         super().__init__()
         self.worker_layers = worker_layers
 
@@ -22,12 +22,23 @@ class DistributedCUDARPCSequential(nn.Module):
             self.worker_layers[i].remote_module.rpc_sync().set_next_shard(self.worker_layers[i + 1].remote_module)
 
         self.first_shard = self.worker_layers[0].remote_module
+        self.microbatch_size = microbatch_size
 
-    def forward(self, x):
-        x = self.first_shard.remote().forward(x)
-        for _ in self.worker_layers:
-            x = x.to_here()
-        return x
+    def forward(self, xs):
+        if self.microbatch_size == None:
+            xs = self.first_shard.remote().forward(xs)
+            for _ in self.worker_layers:
+                xs = xs.to_here()
+            return xs
+        else:
+            outputs = []
+            for x in iter(xs.split(self.microbatch_size, dim=0)):
+                outputs.append(self.first_shard.remote().forward(x))
+
+            for i in range(len(outputs)):
+                for _ in self.worker_layers:
+                    outputs[i] = outputs[i].to_here()
+            return torch.cat(outputs)
 
     def train(self, mode=True):
         self.first_shard.rpc_sync().train(mode=mode)

@@ -20,14 +20,14 @@ class DistributedCUDARPCSequential(nn.Module):
 
     def forward(self, xs):
         if self.microbatch_size == None:
-            x_rref = RRef(xs)  # x_rref is initially on master cpu
+            x_rref = RRef(xs, devices=[0])  # x_rref is initially on master cpu
             for worker_layer in self.worker_layers:
                 x_rref = worker_layer(x_rref)  # pass to worker layer
             return x_rref.to_here()  # get x to master cpu
         else:
             out_futures = []
             for x in iter(xs.split(self.microbatch_size, dim=0)):
-                x_rref = RRef(x)
+                x_rref = RRef(x, devices=[0])
                 for worker_layer in self.worker_layers[:-1]:
                     x_rref = worker_layer.forward(x_rref)
                 z_fut = self.worker_layers[-1].remote_module.rpc_async().forward(x_rref)
